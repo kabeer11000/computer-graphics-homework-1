@@ -24,8 +24,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 var pitch = 0, yaw = 0, roll = 0;
-var speed = 0;
-var px = 0, py = 5, pz = 0;
+var speed = 10;
+var px = 0, py = 2, pz = 0;
 
 var patchSize = 50;
 var viewDist = 10;
@@ -151,11 +151,11 @@ window.onresize = () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
 };
-
+const clamp = (val, min, max) => Math.min(Math.max(val, min), max);
 function update(dt) {
     var tp = 0, ty = 0, tr = 0;
-    if (keys['w'] || keys['W']) tp = dt * 3;
-    if (keys['s'] || keys['S']) tp = -dt * 3;
+    if (keys['w'] || keys['W']) tp = py < 2 ? 0 : (dt * 3);
+    if (keys['s'] || keys['S']) tp = py > 100 ? 0 : (-dt * 3);
     if (keys['a'] || keys['A']) ty = dt * 3;
     if (keys['d'] || keys['D']) ty = -dt * 3;
     if (keys['q'] || keys['Q']) tr = dt * 3;
@@ -168,12 +168,13 @@ function update(dt) {
     // Friction - reduce angular velocity over time (not displace to zero)
     pitch *= (1 - dt * 2);
     roll *= (1 - dt * 2);
+    yaw *= (1 - dt * 1.25);
 
     pitch = Math.max(-1.2, Math.min(1.2, pitch));
     yaw = Math.max(-1.5, Math.min(1.5, yaw));
     roll = Math.max(-1.2, Math.min(1.2, roll));
-    if (keys['ArrowUp']) speed = Math.min(8, speed + dt * 4);
-    if (keys['ArrowDown']) speed = Math.max(0, speed - dt * 4);
+    if (keys['ArrowUp']) speed = clamp(Math.min(8, speed + dt * 4), 4, 20);
+    if (keys['ArrowDown']) speed = clamp(Math.max(0, speed - dt * 4), 4, 20);
 
     // In local space: pitch up = nose rises = move up in world Y
     var cosP = Math.cos(pitch), sinP = -Math.sin(pitch);
@@ -185,7 +186,7 @@ function update(dt) {
     var fwdZ = cosY * cosP;
 
     px += fwdX * speed * dt;
-    py = Math.max(3, Math.min(15, py + fwdY * speed * dt));
+    py = Math.max(1, Math.min(100, py + fwdY * speed * dt));
     pz += fwdZ * speed * dt;
 }
 
@@ -204,7 +205,7 @@ function render() {
     // Camera fixed behind and above the plane, looking at plane
     var camX = px - Math.sin(yaw) * camDist;
     var camZ = pz - Math.cos(yaw) * camDist;
-    var camY = py + 1;
+    var camY = py+0.25;
     camera.position.set(camX, camY, camZ);
     camera.lookAt(px, py, pz);
 
