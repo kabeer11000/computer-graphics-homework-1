@@ -3,450 +3,295 @@
 <head>
 <title>Flight Simulator</title>
 <meta charset="utf-8">
+<style>
+body { margin: 0; overflow: hidden; background: #000; }
+canvas { display: block; }
+#info { position: absolute; top: 10px; left: 10px; color: #0f0; font: 14px monospace; background: rgba(0,0,0,0.7); padding: 10px; }
+</style>
 </head>
 <body>
-<canvas id="glCanvas" width="800" height="600"></canvas>
-<div id="info" style="position:absolute;top:10px;left:10px;color:white;font-family:monospace;font-size:12px;">
-Speed: 0.00 | Alt: 3.00 | Pitch: 0 | Yaw: 0 | Roll: 0<br>
-L/R: 1/2 | T/B: 3/4 | N/F: 5/6 | V: view | C: color | W/S: pitch | A/D: yaw | Q/E: roll | Arrows: speed | Esc: quit
-</div>
+<canvas id="c"></canvas>
+<div id="info">Pos: 0,0</div>
 <script>
-var canvas = document.getElementById('glCanvas');
+var canvas = document.getElementById('c');
 var gl = canvas.getContext('webgl');
-
-if (!gl) {
-    alert('WebGL not supported');
-    throw new Error('WebGL not supported');
-}
+if (!gl) { alert('No WebGL'); }
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
 
 gl.enable(gl.DEPTH_TEST);
+gl.clearColor(0.4, 0.6, 1.0, 1);
 
-var viewMode = 2;
-var colorMode = 2;
 var pitch = 0, yaw = 0, roll = 0;
-var speed = 0.5;
-var maxSpeed = 2.0;
-var posX = 0, posZ = 0;
-var posY = 3.0;
+var speed = 0;
+var px = 0, py = 3, pz = 0;
 
-var frustum = { left: -1, right: 1, top: 1, bottom: -1, near: 0.1, far: 300 };
+var patchSize = 50;
+var viewDist = 10;
 
 var keys = {};
-document.onkeydown = function(e) {
-    keys[e.key] = true;
-    keys[e.code] = true;
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].indexOf(e.key) !== -1) {
-        e.preventDefault();
-    }
-    if (e.key === 'Escape') window.location = 'about:blank';
-    if (e.key === 'v' || e.key === 'V') viewMode = (viewMode + 1) % 3;
-    if (e.key === 'c' || e.key === 'C') colorMode = (colorMode + 1) % 3;
-};
-document.onkeyup = function(e) {
-    keys[e.key] = false;
-    keys[e.code] = false;
-};
+window.onkeydown = e => { keys[e.key] = true; e.preventDefault(); };
+window.onkeyup = e => { keys[e.key] = false; };
+window.onresize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
 
-function glEnable(x) { if (!gl.isEnabled(x)) gl.enable(x); }
-
-function dot(u, v) { return u[0]*v[0] + u[1]*v[1] + u[2]*v[2]; }
-function cross(u, v) { return [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]; }
-function normalize(v) { var l = Math.sqrt(dot(v,v)); return [v[0]/l, v[1]/l, v[2]/l]; }
-function rotX(v, a) {
-    var c = Math.cos(a), s = Math.sin(a);
-    return [v[0], v[1]*c - v[2]*s, v[1]*s + v[2]*c];
-}
-function rotY(v, a) {
-    var c = Math.cos(a), s = Math.sin(a);
-    return [v[0]*c + v[2]*s, v[1], -v[0]*s + v[2]*c];
-}
-function rotZ(v, a) {
-    var c = Math.cos(a), s = Math.sin(a);
-    return [v[0]*c - v[1]*s, v[0]*s + v[1]*c, v[2]];
-}
-
-var perm = [];
-for (var i = 0; i < 256; i++) perm[i] = i;
-for (var i = 255; i > 0; i--) {
-    var j = Math.floor(Math.random() * (i + 1));
-    var t = perm[i]; perm[i] = perm[j]; perm[j] = t;
-}
-for (var i = 0; i < 256; i++) perm[256 + i] = perm[i];
+var P = [];
+for (var i = 0; i < 256; i++) P[i] = Math.floor(Math.random() * 256);
+for (var i = 0; i < 256; i++) P[256 + i] = P[i];
 
 function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
 function lerp(a, b, t) { return a + t * (b - a); }
-function grad(hash, x, y) {
-    var h = hash & 15;
+function grad(h, x, y) {
+    h &= 15;
     var u = h < 8 ? x : y;
     var v = h < 4 ? y : h === 12 || h === 14 ? x : 0;
     return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
 }
 
 function perlin(x, y) {
-    var X = Math.floor(x) & 255;
-    var Y = Math.floor(y) & 255;
-    x -= Math.floor(x);
-    y -= Math.floor(y);
+    var X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+    x -= Math.floor(x); y -= Math.floor(y);
     var u = fade(x), v = fade(y);
-    var A = perm[X] + Y, B = perm[X + 1] + Y;
+    var A = P[X] + Y, B = P[X + 1] + Y;
     return lerp(
-        lerp(grad(perm[A], x, y), grad(perm[B], x - 1, y), u),
-        lerp(grad(perm[A + 1], x, y - 1), grad(perm[B + 1], x - 1, y - 1), u),
-        v
-    );
+        lerp(grad(P[A], x, y), grad(P[B], x - 1, y), u),
+        lerp(grad(P[A + 1], x, y - 1), grad(P[B + 1], x - 1, y - 1), u), v);
 }
 
-function fbm(x, y, octaves) {
-    var val = 0, amp = 1, freq = 1, maxVal = 0;
-    for (var i = 0; i < octaves; i++) {
-        val += perlin(x * freq, y * freq) * amp;
-        maxVal += amp;
-        amp *= 0.5;
-        freq *= 2;
-    }
-    return val / maxVal;
+function noise(x, y) {
+    var v = 0, amp = 1, freq = 1, m = 0;
+    for (var i = 0; i < 6; i++) { v += perlin(x * freq, y * freq) * amp; m += amp; amp *= 0.5; freq *= 2; }
+    return v / m;
 }
 
-function getHeight(x, z) {
-    return fbm(x * 0.1, z * 0.1, 4) * 3;
-}
+function height(wx, wz) { return noise(wx * 0.02, wz * 0.02) * 8 - 2; }
 
-function getPatch(xmin, xmax, zmin, zmax) {
-    var res = 40;
-    var verts = [], tris = [];
-    var stepX = (xmax - xmin) / res;
-    var stepZ = (zmax - zmin) / res;
-    for (var z = 0; z <= res; z++) {
-        for (var x = 0; x <= res; x++) {
-            var px = xmin + x * stepX;
-            var pz = zmin + z * stepZ;
-            var py = getHeight(px, pz);
-            verts.push(px, py, pz);
-        }
-    }
-    for (var z = 0; z < res; z++) {
-        for (var x = 0; x < res; x++) {
-            var i = z * (res + 1) + x;
-            tris.push(i, i + 1, i + res + 1);
-            tris.push(i + 1, i + res + 2, i + res + 1);
-        }
-    }
-    return { verts: verts, tris: tris, xmin: xmin, xmax: xmax, zmin: zmin, zmax: zmax };
-}
-
-function heightToColor(y) {
-    if (y < 0) return [0.1, 0.3, 0.8];
-    if (y < 0.5) return [0.2, 0.6, 0.2];
-    if (y < 2) return [0.4, 0.5, 0.3];
-    if (y < 3.5) return [0.6, 0.5, 0.4];
-    var t = Math.min(1, (y - 3.5) / 2);
-    return [0.5 + 0.5 * t, 0.5 + 0.5 * t, 0.5 + 0.5 * t];
-}
-
-function computeFaceNormal(v0, v1, v2) {
-    var e1 = [v1[0]-v0[0], v1[1]-v0[1], v1[2]-v0[2]];
-    var e2 = [v2[0]-v0[0], v2[1]-v0[1], v2[2]-v0[2]];
-    var n = cross(e1, e2);
-    return normalize(n);
+function col(y) {
+    if (y < -2) return [0.1, 0.3, 0.8];
+    if (y < 0) return [0.2, 0.6, 0.2];
+    if (y < 3) return [0.3, 0.7, 0.3];
+    if (y < 5) return [0.5, 0.4, 0.3];
+    return [1, 1, 1];
 }
 
 var patches = {};
-var patchSize = 30;
-var patchBuffers = {};
-var range = 15;
+var pbuf = {};
 
-function ensurePatches() {
-    var curPX = Math.floor(posX / patchSize);
-    var curPZ = Math.floor(posZ / patchSize);
+function getPatch(ix, iz) {
+    var k = ix + ',' + iz;
+    if (patches[k]) return patches[k];
 
-    var fwdX = Math.sin(yaw);
-    var fwdZ = Math.cos(yaw);
-    var extraX = fwdX > 0.3 ? 5 : (fwdX < -0.3 ? -5 : 0);
-    var extraZ = fwdZ > 0.3 ? 5 : (fwdZ < -0.3 ? -5 : 0);
+    var verts = [], tris = [], cols = [], nverts = 0;
+    var res = 25;
+    var x0 = ix * patchSize, x1 = (ix + 1) * patchSize;
+    var z0 = iz * patchSize, z1 = (iz + 1) * patchSize;
 
-    for (var dz = -range - extraZ; dz <= range; dz++) {
-        for (var dx = -range - extraX; dx <= range; dx++) {
-            var px = curPX + dx;
-            var pz = curPZ + dz;
-            var key = px + ',' + pz;
-            if (!patches[key]) {
-                patches[key] = getPatch(px * patchSize, (px + 1) * patchSize, pz * patchSize, (pz + 1) * patchSize);
-            }
+    for (var z = 0; z <= res; z++) {
+        for (var x = 0; x <= res; x++) {
+            var wx = x0 + (x1 - x0) * x / res;
+            var wz = z0 + (z1 - z0) * z / res;
+            var wy = height(wx, wz);
+            verts.push(wx, wy, wz);
+            var c = col(wy);
+            cols.push(c[0], c[1], c[2], 1);
+            nverts++;
         }
     }
-}
 
-function buildBuffers(patch) {
-    var verts = patch.verts;
-    var tris = patch.tris;
-    var nverts = verts.length / 3;
-    var colors = [];
-    for (var i = 0; i < nverts; i++) {
-        var c = heightToColor(verts[i * 3 + 1]);
-        colors.push(c[0], c[1], c[2], 1);
+    for (var z = 0; z < res; z++) {
+        for (var x = 0; x < res; x++) {
+            var i = z * (res + 1) + x;
+            tris.push(i, i + 1, i + res + 1, i + 1, i + res + 2, i + res + 1);
+        }
     }
-    var normals = new Array(verts.length).fill(0);
 
+    var norms = [];
+    for (var i = 0; i < nverts * 3; i++) norms[i] = 0;
     for (var i = 0; i < tris.length; i += 3) {
-        var i0 = tris[i] * 3, i1 = tris[i + 1] * 3, i2 = tris[i + 2] * 3;
-        var v0 = [verts[i0], verts[i0 + 1], verts[i0 + 2]];
-        var v1 = [verts[i1], verts[i1 + 1], verts[i1 + 2]];
-        var v2 = [verts[i2], verts[i2 + 1], verts[i2 + 2]];
-        var n = computeFaceNormal(v0, v1, v2);
+        var a = tris[i] * 3, b = tris[i + 1] * 3, c = tris[i + 2] * 3;
+        var e1x = verts[b] - verts[a], e1y = verts[b+1] - verts[a+1], e1z = verts[b+2] - verts[a+2];
+        var e2x = verts[c] - verts[a], e2y = verts[c+1] - verts[a+1], e2z = verts[c+2] - verts[a+2];
+        var nx = e1y*e2z - e1z*e2y, ny = e1z*e2x - e1x*e2z, nz = e1x*e2y - e1y*e2x;
+        var l = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1;
+        nx /= l; ny /= l; nz /= l;
         for (var j = 0; j < 3; j++) {
-            var idx = tris[i + j] * 3;
-            normals[idx] += n[0];
-            normals[idx + 1] += n[1];
-            normals[idx + 2] += n[2];
+            var ii = tris[i+j] * 3;
+            norms[ii] += nx; norms[ii+1] += ny; norms[ii+2] += nz;
         }
     }
-    for (var i = 0; i < normals.length; i += 3) {
-        var l = Math.sqrt(normals[i]*normals[i] + normals[i+1]*normals[i+1] + normals[i+2]*normals[i+2]);
-        if (l > 0) { normals[i]/=l; normals[i+1]/=l; normals[i+2]/=l; }
+    for (var i = 0; i < nverts * 3; i += 3) {
+        var l = Math.sqrt(norms[i]*norms[i] + norms[i+1]*norms[i+1] + norms[i+2]*norms[i+2]) || 1;
+        norms[i] /= l; norms[i+1] /= l; norms[i+2] /= l;
     }
 
-    var vertBuf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vertBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
-
-    var colorBuf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, colorBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colors), gl.STATIC_DRAW);
-
-    var normBuf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, normBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.STATIC_DRAW);
-
-    var indexBuf = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuf);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(tris), gl.STATIC_DRAW);
-
-    return { vertBuf: vertBuf, colorBuf: colorBuf, normBuf: normBuf, indexBuf: indexBuf, count: tris.length };
+    var patch = { verts: verts, tris: tris, cols: cols, norms: norms, n: nverts, count: tris.length };
+    patches[k] = patch;
+    return patch;
 }
 
-function getBuffers(patch) {
-    var key = Math.floor(patch.xmin / patchSize) + ',' + Math.floor(patch.zmin / patchSize);
-    if (patchBuffers[key] == null) {
-        patchBuffers[key] = buildBuffers(patch);
-    }
-    return patchBuffers[key];
+function makeBuf(patch) {
+    var vb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(patch.verts), gl.STATIC_DRAW);
+
+    var cb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, cb);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(patch.cols), gl.STATIC_DRAW);
+
+    var nb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, nb);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(patch.norms), gl.STATIC_DRAW);
+
+    var ib = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(patch.tris), gl.STATIC_DRAW);
+
+    return { vb: vb, cb: cb, nb: nb, ib: ib, n: patch.count };
 }
 
-var vsSource = `
-attribute vec3 aPosition;
-attribute vec3 aColor;
-attribute vec3 aNormal;
-uniform mat4 uModel;
+function getBuf(ix, iz) {
+    var k = ix + ',' + iz;
+    if (!pbuf[k]) pbuf[k] = makeBuf(getPatch(ix, iz));
+    return pbuf[k];
+}
+
+var vs = `
+attribute vec3 aPos;
+attribute vec4 aCol;
+attribute vec3 aNorm;
 uniform mat4 uView;
 uniform mat4 uProj;
-varying vec3 vColor;
-varying vec3 vNormal;
-varying vec3 vPos;
+varying vec4 vCol;
+varying vec3 vNorm;
 void main() {
-    vec4 pos = uView * uModel * vec4(aPosition, 1.0);
-    vPos = pos.xyz;
-    vColor = aColor;
-    vNormal = mat3(uView) * aNormal;
-    gl_Position = uProj * pos;
+    gl_Position = uProj * uView * vec4(aPos, 1.0);
+    vCol = aCol;
+    vNorm = mat3(uView) * aNorm;
 }`;
 
-var fsSource = `
+var fs = `
 precision mediump float;
-varying vec3 vColor;
-varying vec3 vNormal;
-varying vec3 vPos;
-uniform vec3 uLightDir;
-uniform vec3 uCamPos;
+varying vec4 vCol;
+varying vec3 vNorm;
+uniform vec3 uLight;
 void main() {
-    vec3 n = normalize(vNormal);
-    vec3 l = normalize(uLightDir);
-    vec3 v = normalize(uCamPos - vPos);
-    vec3 h = normalize(l + v);
-    float diff = max(dot(n, l), 0.0);
-    float spec = pow(max(dot(n, h), 0.0), 32.0);
-    float amb = 0.2;
-    float d = 0.6;
-    vec3 col = vColor * (amb + d * diff) + vec3(spec * 0.5);
-    gl_FragColor = vec4(col, 1.0);
+    float d = max(dot(normalize(vNorm), normalize(uLight)), 0.0);
+    gl_FragColor = vCol * (0.35 + 0.65 * d);
 }`;
 
-var vs = gl.createShader(gl.VERTEX_SHADER);
-gl.shaderSource(vs, vsSource);
-gl.compileShader(vs);
+function compSh(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+    return s;
+}
 
-var fs = gl.createShader(gl.FRAGMENT_SHADER);
-gl.shaderSource(fs, fsSource);
-gl.compileShader(fs);
+var prog = gl.createProgram();
+gl.attachShader(prog, compSh(gl.VERTEX_SHADER, vs));
+gl.attachShader(prog, compSh(gl.FRAGMENT_SHADER, fs));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
 
-var program = gl.createProgram();
-gl.attachShader(program, vs);
-gl.attachShader(program, fs);
-gl.linkProgram(program);
-gl.useProgram(program);
+var aP = gl.getAttribLocation(prog, 'aPos');
+var aC = gl.getAttribLocation(prog, 'aCol');
+var aN = gl.getAttribLocation(prog, 'aNorm');
+var uV = gl.getUniformLocation(prog, 'uView');
+var uPr = gl.getUniformLocation(prog, 'uProj');
+var uL = gl.getUniformLocation(prog, 'uLight');
+gl.uniform3f(uL, 0.4, 0.8, 0.3);
 
-var aPosition = gl.getAttribLocation(program, 'aPosition');
-var aColor = gl.getAttribLocation(program, 'aColor');
-var aNormal = gl.getAttribLocation(program, 'aNormal');
-var uModel = gl.getUniformLocation(program, 'uModel');
-var uView = gl.getUniformLocation(program, 'uView');
-var uProj = gl.getUniformLocation(program, 'uProj');
-var uLightDir = gl.getUniformLocation(program, 'uLightDir');
-var uCamPos = gl.getUniformLocation(program, 'uCamPos');
-
-var mMatrix = new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);
-gl.uniformMatrix4fv(uModel, false, mMatrix);
-
-gl.uniform3f(uLightDir, 0.5, 1.0, 0.3);
-
-function makePerspective(fov, aspect, near, far) {
-    var f = 1.0 / Math.tan(fov / 2);
+function persp() {
+    var asp = canvas.width / canvas.height;
+    var f = 1.0 / Math.tan(60 * Math.PI / 360);
+    var nf = 1.0 / (0.1 - 500.0);
     return new Float32Array([
-        f / aspect, 0, 0, 0,
+        f / asp, 0, 0, 0,
         0, f, 0, 0,
-        0, 0, (far + near) / (near - far), -1,
-        0, 0, (2 * far * near) / (near - far), 0
+        0, 0, (500.0 + 0.1) * nf, -1,
+        0, 0, 2.0 * 500.0 * 0.1 * nf, 0
     ]);
 }
 
-function makeLookAt(eye, center, up) {
-    var f = normalize([center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]]);
-    var s = normalize(cross(f, up));
-    var u = cross(s, f);
+function lookAt(ex, ey, ez, tx, ty, tz, ux, uy, uz) {
+    var fx = tx - ex, fy = ty - ey, fz = tz - ez;
+    var fl = Math.sqrt(fx*fx + fy*fy + fz*fz); fx /= fl; fy /= fl; fz /= fl;
+    var rx = uy*fz - uz*fy, ry = uz*fx - ux*fz, rz = ux*fy - uy*fx;
+    var rl = Math.sqrt(rx*rx + ry*ry + rz*rz); rx /= rl; ry /= rl; rz /= rl;
+    var ux2 = fy*rz - fz*ry, uy2 = fz*rx - fx*rz, uz2 = fx*ry - fy*rx;
     return new Float32Array([
-        s[0], u[0], -f[0], 0,
-        s[1], u[1], -f[1], 0,
-        s[2], u[2], -f[2], 0,
-        -dot(s, eye), -dot(u, eye), dot(f, eye), 1
+        rx, ux2, -fx, 0,
+        ry, uy2, -fy, 0,
+        rz, uz2, -fz, 0,
+        -(rx*ex + ry*ey + rz*ez), -(ux2*ex + uy2*ey + uz2*ez), (fx*ex + fy*ey + fz*ez), 1
     ]);
-}
-
-function computeCameraVectors() {
-    var fwdX = Math.sin(yaw) * Math.cos(pitch);
-    var fwdY = Math.sin(pitch);
-    var fwdZ = Math.cos(yaw) * Math.cos(pitch);
-
-    var rightX = Math.cos(yaw);
-    var rightY = 0;
-    var rightZ = -Math.sin(yaw);
-
-    var upX = fwdY * rightZ - fwdZ * rightY;
-    var upY = fwdZ * rightX - fwdX * rightZ;
-    var upZ = fwdX * rightY - fwdY * rightX;
-
-    var cosR = Math.cos(roll), sinR = Math.sin(roll);
-    var newUpX = upX * cosR + upY * sinR;
-    var newUpY = -upX * sinR + upY * cosR;
-    var newUpZ = upZ;
-
-    return {
-        fwd: [fwdX, fwdY, fwdZ],
-        up: [newUpX, newUpY, newUpZ]
-    };
 }
 
 function update(dt) {
-    var pDelta = 0, yDelta = 0, rDelta = 0;
-    if (keys['w'] || keys['W']) pDelta = dt * 1.2;
-    if (keys['s'] || keys['S']) pDelta = -dt * 1.2;
-    if (keys['a'] || keys['A']) yDelta = dt * 1.2;
-    if (keys['d'] || keys['D']) yDelta = -dt * 1.2;
-    if (keys['q'] || keys['Q']) rDelta = dt * 1.2;
-    if (keys['e'] || keys['E']) rDelta = -dt * 1.2;
-
-    pitch += pDelta;
-    yaw += yDelta;
-    roll += rDelta;
-
-    pitch = Math.max(-1.5, Math.min(1.5, pitch));
-    yaw = Math.max(-1.5, Math.min(1.5, yaw));
-    roll = Math.max(-1.5, Math.min(1.5, roll));
-
-    if (keys['ArrowUp']) speed = Math.min(maxSpeed, speed + dt * 2);
-    if (keys['ArrowDown']) speed = Math.max(0, speed - dt * 2);
-
-    var fwdX = Math.sin(yaw) * Math.cos(pitch);
-    var fwdY = Math.sin(pitch);
-    var fwdZ = Math.cos(yaw) * Math.cos(pitch);
-
-    posX += fwdX * speed * dt;
-    posY = Math.max(2.5, Math.min(3.5, posY + fwdY * speed * dt));
-    posZ += fwdZ * speed * dt;
+    var tp = 0, ty = 0, tr = 0;
+    if (keys['w'] || keys['W']) tp = dt * 3;
+    if (keys['s'] || keys['S']) tp = -dt * 3;
+    if (keys['a'] || keys['A']) ty = dt * 3;
+    if (keys['d'] || keys['D']) ty = -dt * 3;
+    if (keys['q'] || keys['Q']) tr = dt * 3;
+    if (keys['e'] || keys['E']) tr = -dt * 3;
+    pitch = Math.max(-1.2, Math.min(1.2, pitch + tp));
+    yaw += ty;
+    roll = Math.max(-1.2, Math.min(1.2, roll + tr));
+    if (keys['ArrowUp']) speed = Math.min(8, speed + dt * 4);
+    if (keys['ArrowDown']) speed = Math.max(0, speed - dt * 4);
+    var dx = Math.sin(yaw) * Math.cos(pitch);
+    var dy = Math.sin(pitch);
+    var dz = Math.cos(yaw) * Math.cos(pitch);
+    px += dx * speed * dt;
+    py = Math.max(2.5, Math.min(12, py + dy * speed * dt));
+    pz += dz * speed * dt;
 }
 
 function render() {
     gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clearColor(0.5, 0.7, 1.0, 1.0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    ensurePatches();
+    var fwd = [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
+    var view = lookAt(px, py, pz, px + fwd[0], py + fwd[1], pz + fwd[2], 0, 1, 0);
+    var proj = persp();
 
-    var vecs = computeCameraVectors();
-    var target = [posX + vecs.fwd[0], posY + vecs.fwd[1], posZ + vecs.fwd[2]];
-    var viewMat = makeLookAt([posX, posY, posZ], target, vecs.up);
-    var projMat = makePerspective(
-        Math.atan(frustum.top / frustum.near) * 2,
-        canvas.width / canvas.height,
-        frustum.near,
-        frustum.far
-    );
+    gl.uniformMatrix4fv(uV, false, view);
+    gl.uniformMatrix4fv(uPr, false, proj);
 
-    gl.uniformMatrix4fv(uView, false, viewMat);
-    gl.uniformMatrix4fv(uProj, false, projMat);
-    gl.uniform3f(uCamPos, posX, posY, posZ);
+    var cx = Math.floor(px / patchSize);
+    var cz = Math.floor(pz / patchSize);
 
-    var curPX = Math.floor(posX / patchSize);
-    var curPZ = Math.floor(posZ / patchSize);
+    for (var iz = cz - viewDist; iz <= cz + viewDist; iz++) {
+        for (var ix = cx - viewDist; ix <= cx + viewDist; ix++) {
+            var buf = getBuf(ix, iz);
+            var patch = getPatch(ix, iz);
 
-    var fwdX = Math.sin(yaw);
-    var fwdZ = Math.cos(yaw);
-    var extraX = fwdX > 0.3 ? 5 : (fwdX < -0.3 ? -5 : 0);
-    var extraZ = fwdZ > 0.3 ? 5 : (fwdZ < -0.3 ? -5 : 0);
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf.vb);
+            gl.enableVertexAttribArray(aP);
+            gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 0, 0);
 
-    for (var dz = -range - extraZ; dz <= range; dz++) {
-        for (var dx = -range - extraX; dx <= range; dx++) {
-            var px = curPX + dx;
-            var pz = curPZ + dz;
-            var key = px + ',' + pz;
-            var patch = patches[key];
-            if (!patch) continue;
-            var buf = getBuffers(patch);
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf.cb);
+            gl.enableVertexAttribArray(aC);
+            gl.vertexAttribPointer(aC, 4, gl.FLOAT, false, 0, 0);
 
-            gl.bindBuffer(gl.ARRAY_BUFFER, buf.vertBuf);
-            gl.enableVertexAttribArray(aPosition);
-            gl.vertexAttribPointer(aPosition, 3, gl.FLOAT, false, 0, 0);
+            gl.bindBuffer(gl.ARRAY_BUFFER, buf.nb);
+            gl.enableVertexAttribArray(aN);
+            gl.vertexAttribPointer(aN, 3, gl.FLOAT, false, 0, 0);
 
-            gl.bindBuffer(gl.ARRAY_BUFFER, buf.colorBuf);
-            gl.enableVertexAttribArray(aColor);
-            gl.vertexAttribPointer(aColor, 4, gl.FLOAT, false, 0, 0);
-
-            gl.bindBuffer(gl.ARRAY_BUFFER, buf.normBuf);
-            gl.enableVertexAttribArray(aNormal);
-            gl.vertexAttribPointer(aNormal, 3, gl.FLOAT, false, 0, 0);
-
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf.indexBuf);
-
-            if (viewMode === 0) {
-                gl.drawArrays(gl.POINTS, 0, patch.verts.length / 3);
-            } else if (viewMode === 1) {
-                gl.drawElements(gl.LINES, buf.count, gl.UNSIGNED_SHORT, 0);
-            } else {
-                gl.drawElements(gl.TRIANGLES, buf.count, gl.UNSIGNED_SHORT, 0);
-            }
+            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf.ib);
+            gl.drawElements(gl.TRIANGLES, buf.n, gl.UNSIGNED_SHORT, 0);
         }
     }
 
-    document.getElementById('info').innerHTML =
-        'Speed: ' + speed.toFixed(2) + ' | Alt: ' + posY.toFixed(2) +
-        ' | Pitch: ' + (pitch * 57.3).toFixed(0) + ' | Yaw: ' + (yaw * 57.3).toFixed(0) + ' | Roll: ' + (roll * 57.3).toFixed(0);
+    document.getElementById('info').textContent = 'Pos: ' + px.toFixed(0) + ',' + pz.toFixed(0) + ' | Patches: ' + Object.keys(patches).length;
 }
 
 var last = 0;
 function loop(t) {
-    var dt = (t - last) / 1000;
+    var dt = Math.min(0.1, (t - last) / 1000);
     last = t;
-    if (dt > 0 && dt < 0.1) {
-        update(dt);
-    }
+    update(dt);
     render();
     requestAnimationFrame(loop);
 }
