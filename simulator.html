@@ -176,7 +176,7 @@ function update(dt) {
     if (keys['ArrowDown']) speed = Math.max(0, speed - dt * 4);
 
     // In local space: pitch up = nose rises = move up in world Y
-    var cosP = Math.cos(pitch), sinP = Math.sin(pitch);
+    var cosP = Math.cos(pitch), sinP = -Math.sin(pitch);
     var cosY = Math.cos(yaw), sinY = Math.sin(yaw);
 
     // Forward direction in world space (no banking)
