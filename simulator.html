@@ -10,21 +10,22 @@ canvas { display: block; }
 </style>
 </head>
 <body>
-<canvas id="c"></canvas>
-<div id="info">Pos: 0,0</div>
-<script>
-var canvas = document.getElementById('c');
-var gl = canvas.getContext('webgl');
-if (!gl) { alert('No WebGL'); }
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
-
-gl.enable(gl.DEPTH_TEST);
-gl.clearColor(0.4, 0.6, 1.0, 1);
+<div id="info">Loading...</div>
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 var pitch = 0, yaw = 0, roll = 0;
 var speed = 0;
-var px = 0, py = 3, pz = 0;
+var px = 0, py = 5, pz = 0;
 
 var patchSize = 50;
 var viewDist = 10;
@@ -32,8 +33,24 @@ var viewDist = 10;
 var keys = {};
 window.onkeydown = e => { keys[e.key] = true; e.preventDefault(); };
 window.onkeyup = e => { keys[e.key] = false; };
-window.onresize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
 
+var renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x6798c8);
+document.body.appendChild(renderer.domElement);
+
+var scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x6798c8, 100, 800);
+
+var camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
+camera.position.set(0, 5, 0);
+
+var light = new THREE.DirectionalLight(0xffffff, 1.2);
+light.position.set(0.4, 0.8, 0.3);
+scene.add(light);
+scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+
+// Perlin noise
 var P = [];
 for (var i = 0; i < 256; i++) P[i] = Math.floor(Math.random() * 256);
 for (var i = 0; i < 256; i++) P[256 + i] = P[i];
@@ -46,7 +63,6 @@ function grad(h, x, y) {
     var v = h < 4 ? y : h === 12 || h === 14 ? x : 0;
     return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
 }
-
 function perlin(x, y) {
     var X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
     x -= Math.floor(x); y -= Math.floor(y);
@@ -56,15 +72,12 @@ function perlin(x, y) {
         lerp(grad(P[A], x, y), grad(P[B], x - 1, y), u),
         lerp(grad(P[A + 1], x, y - 1), grad(P[B + 1], x - 1, y - 1), u), v);
 }
-
 function noise(x, y) {
     var v = 0, amp = 1, freq = 1, m = 0;
     for (var i = 0; i < 6; i++) { v += perlin(x * freq, y * freq) * amp; m += amp; amp *= 0.5; freq *= 2; }
     return v / m;
 }
-
 function height(wx, wz) { return noise(wx * 0.02, wz * 0.02) * 8 - 2; }
-
 function col(y) {
     if (y < -2) return [0.1, 0.3, 0.8];
     if (y < 0) return [0.2, 0.6, 0.2];
@@ -74,13 +87,13 @@ function col(y) {
 }
 
 var patches = {};
-var pbuf = {};
+var patchMeshes = {};
 
 function getPatch(ix, iz) {
     var k = ix + ',' + iz;
     if (patches[k]) return patches[k];
 
-    var verts = [], tris = [], cols = [], nverts = 0;
+    var verts = [], cols = [];
     var res = 25;
     var x0 = ix * patchSize, x1 = (ix + 1) * patchSize;
     var z0 = iz * patchSize, z1 = (iz + 1) * patchSize;
@@ -93,139 +106,51 @@ function getPatch(ix, iz) {
             verts.push(wx, wy, wz);
             var c = col(wy);
             cols.push(c[0], c[1], c[2], 1);
-            nverts++;
         }
     }
 
+    var idxs = [];
     for (var z = 0; z < res; z++) {
         for (var x = 0; x < res; x++) {
             var i = z * (res + 1) + x;
-            tris.push(i, i + 1, i + res + 1, i + 1, i + res + 2, i + res + 1);
+            idxs.push(i, i + 1, i + res + 1, i + 1, i + res + 2, i + res + 1);
         }
     }
 
-    var norms = [];
-    for (var i = 0; i < nverts * 3; i++) norms[i] = 0;
-    for (var i = 0; i < tris.length; i += 3) {
-        var a = tris[i] * 3, b = tris[i + 1] * 3, c = tris[i + 2] * 3;
-        var e1x = verts[b] - verts[a], e1y = verts[b+1] - verts[a+1], e1z = verts[b+2] - verts[a+2];
-        var e2x = verts[c] - verts[a], e2y = verts[c+1] - verts[a+1], e2z = verts[c+2] - verts[a+2];
-        var nx = e1y*e2z - e1z*e2y, ny = e1z*e2x - e1x*e2z, nz = e1x*e2y - e1y*e2x;
-        var l = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1;
-        nx /= l; ny /= l; nz /= l;
-        for (var j = 0; j < 3; j++) {
-            var ii = tris[i+j] * 3;
-            norms[ii] += nx; norms[ii+1] += ny; norms[ii+2] += nz;
-        }
-    }
-    for (var i = 0; i < nverts * 3; i += 3) {
-        var l = Math.sqrt(norms[i]*norms[i] + norms[i+1]*norms[i+1] + norms[i+2]*norms[i+2]) || 1;
-        norms[i] /= l; norms[i+1] /= l; norms[i+2] /= l;
-    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 4));
+    geo.setIndex(idxs);
+    geo.computeVertexNormals();
 
-    var patch = { verts: verts, tris: tris, cols: cols, norms: norms, n: nverts, count: tris.length };
+    var mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+
+    var patch = { mesh: mesh };
     patches[k] = patch;
+    patchMeshes[k] = mesh;
     return patch;
 }
 
-function makeBuf(patch) {
-    var vb = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vb);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(patch.verts), gl.STATIC_DRAW);
+var plane = null;
+var loader = new GLTFLoader();
+loader.load('cartoon_plane.glb', (gltf) => {
+    plane = gltf.scene;
+    plane.scale.set(0.5, 0.5, 0.5);
+    scene.add(plane);
+    document.getElementById('info').textContent = 'Pos: 0,0 | Click to start';
+}, undefined, (err) => {
+    console.error(err);
+    document.getElementById('info').textContent = 'Model load error: ' + err;
+});
 
-    var cb = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, cb);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(patch.cols), gl.STATIC_DRAW);
-
-    var nb = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, nb);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(patch.norms), gl.STATIC_DRAW);
-
-    var ib = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(patch.tris), gl.STATIC_DRAW);
-
-    return { vb: vb, cb: cb, nb: nb, ib: ib, n: patch.count };
-}
-
-function getBuf(ix, iz) {
-    var k = ix + ',' + iz;
-    if (!pbuf[k]) pbuf[k] = makeBuf(getPatch(ix, iz));
-    return pbuf[k];
-}
-
-var vs = `
-attribute vec3 aPos;
-attribute vec4 aCol;
-attribute vec3 aNorm;
-uniform mat4 uView;
-uniform mat4 uProj;
-varying vec4 vCol;
-varying vec3 vNorm;
-void main() {
-    gl_Position = uProj * uView * vec4(aPos, 1.0);
-    vCol = aCol;
-    vNorm = mat3(uView) * aNorm;
-}`;
-
-var fs = `
-precision mediump float;
-varying vec4 vCol;
-varying vec3 vNorm;
-uniform vec3 uLight;
-void main() {
-    float d = max(dot(normalize(vNorm), normalize(uLight)), 0.0);
-    gl_FragColor = vCol * (0.35 + 0.65 * d);
-}`;
-
-function compSh(type, src) {
-    var s = gl.createShader(type);
-    gl.shaderSource(s, src);
-    gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
-    return s;
-}
-
-var prog = gl.createProgram();
-gl.attachShader(prog, compSh(gl.VERTEX_SHADER, vs));
-gl.attachShader(prog, compSh(gl.FRAGMENT_SHADER, fs));
-gl.linkProgram(prog);
-if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) console.error(gl.getProgramInfoLog(prog));
-gl.useProgram(prog);
-
-var aP = gl.getAttribLocation(prog, 'aPos');
-var aC = gl.getAttribLocation(prog, 'aCol');
-var aN = gl.getAttribLocation(prog, 'aNorm');
-var uV = gl.getUniformLocation(prog, 'uView');
-var uPr = gl.getUniformLocation(prog, 'uProj');
-var uL = gl.getUniformLocation(prog, 'uLight');
-gl.uniform3f(uL, 0.4, 0.8, 0.3);
-
-function persp() {
-    var asp = canvas.width / canvas.height;
-    var f = 1.0 / Math.tan(60 * Math.PI / 360);
-    var nf = 1.0 / (0.1 - 500.0);
-    return new Float32Array([
-        f / asp, 0, 0, 0,
-        0, f, 0, 0,
-        0, 0, (500.0 + 0.1) * nf, -1,
-        0, 0, 2.0 * 500.0 * 0.1 * nf, 0
-    ]);
-}
-
-function lookAt(ex, ey, ez, tx, ty, tz, ux, uy, uz) {
-    var fx = tx - ex, fy = ty - ey, fz = tz - ez;
-    var fl = Math.sqrt(fx*fx + fy*fy + fz*fz); fx /= fl; fy /= fl; fz /= fl;
-    var rx = uy*fz - uz*fy, ry = uz*fx - ux*fz, rz = ux*fy - uy*fx;
-    var rl = Math.sqrt(rx*rx + ry*ry + rz*rz); rx /= rl; ry /= rl; rz /= rl;
-    var ux2 = fy*rz - fz*ry, uy2 = fz*rx - fx*rz, uz2 = fx*ry - fy*rx;
-    return new Float32Array([
-        rx, ux2, -fx, 0,
-        ry, uy2, -fy, 0,
-        rz, uz2, -fz, 0,
-        -(rx*ex + ry*ey + rz*ez), -(ux2*ex + uy2*ey + uz2*ez), (fx*ex + fy*ey + fz*ez), 1
-    ]);
-}
+window.onresize = () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+};
 
 function update(dt) {
     var tp = 0, ty = 0, tr = 0;
@@ -235,55 +160,60 @@ function update(dt) {
     if (keys['d'] || keys['D']) ty = -dt * 3;
     if (keys['q'] || keys['Q']) tr = dt * 3;
     if (keys['e'] || keys['E']) tr = -dt * 3;
-    pitch = Math.max(-1.2, Math.min(1.2, pitch + tp));
+
+    pitch += tp;
     yaw += ty;
-    roll = Math.max(-1.2, Math.min(1.2, roll + tr));
+    roll += tr;
+
+    // Friction - reduce angular velocity over time (not displace to zero)
+    pitch *= (1 - dt * 2);
+    roll *= (1 - dt * 2);
+
+    pitch = Math.max(-1.2, Math.min(1.2, pitch));
+    yaw = Math.max(-1.5, Math.min(1.5, yaw));
+    roll = Math.max(-1.2, Math.min(1.2, roll));
     if (keys['ArrowUp']) speed = Math.min(8, speed + dt * 4);
     if (keys['ArrowDown']) speed = Math.max(0, speed - dt * 4);
-    var dx = Math.sin(yaw) * Math.cos(pitch);
-    var dy = Math.sin(pitch);
-    var dz = Math.cos(yaw) * Math.cos(pitch);
-    px += dx * speed * dt;
-    py = Math.max(2.5, Math.min(12, py + dy * speed * dt));
-    pz += dz * speed * dt;
+
+    // In local space: pitch up = nose rises = move up in world Y
+    var cosP = Math.cos(pitch), sinP = Math.sin(pitch);
+    var cosY = Math.cos(yaw), sinY = Math.sin(yaw);
+
+    // Forward direction in world space (no banking)
+    var fwdX = sinY * cosP;
+    var fwdY = sinP;
+    var fwdZ = cosY * cosP;
+
+    px += fwdX * speed * dt;
+    py = Math.max(3, Math.min(15, py + fwdY * speed * dt));
+    pz += fwdZ * speed * dt;
 }
 
+var camDist = 2;
+
 function render() {
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-    var fwd = [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
-    var view = lookAt(px, py, pz, px + fwd[0], py + fwd[1], pz + fwd[2], 0, 1, 0);
-    var proj = persp();
-
-    gl.uniformMatrix4fv(uV, false, view);
-    gl.uniformMatrix4fv(uPr, false, proj);
-
     var cx = Math.floor(px / patchSize);
     var cz = Math.floor(pz / patchSize);
 
     for (var iz = cz - viewDist; iz <= cz + viewDist; iz++) {
         for (var ix = cx - viewDist; ix <= cx + viewDist; ix++) {
-            var buf = getBuf(ix, iz);
-            var patch = getPatch(ix, iz);
-
-            gl.bindBuffer(gl.ARRAY_BUFFER, buf.vb);
-            gl.enableVertexAttribArray(aP);
-            gl.vertexAttribPointer(aP, 3, gl.FLOAT, false, 0, 0);
-
-            gl.bindBuffer(gl.ARRAY_BUFFER, buf.cb);
-            gl.enableVertexAttribArray(aC);
-            gl.vertexAttribPointer(aC, 4, gl.FLOAT, false, 0, 0);
-
-            gl.bindBuffer(gl.ARRAY_BUFFER, buf.nb);
-            gl.enableVertexAttribArray(aN);
-            gl.vertexAttribPointer(aN, 3, gl.FLOAT, false, 0, 0);
-
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf.ib);
-            gl.drawElements(gl.TRIANGLES, buf.n, gl.UNSIGNED_SHORT, 0);
+            getPatch(ix, iz);
         }
     }
 
+    // Camera fixed behind and above the plane, looking at plane
+    var camX = px - Math.sin(yaw) * camDist;
+    var camZ = pz - Math.cos(yaw) * camDist;
+    var camY = py + 1;
+    camera.position.set(camX, camY, camZ);
+    camera.lookAt(px, py, pz);
+
+    if (plane) {
+        plane.position.set(px, py, pz);
+        plane.rotation.set(pitch, yaw, roll, 'YXZ');
+    }
+
+    renderer.render(scene, camera);
     document.getElementById('info').textContent = 'Pos: ' + px.toFixed(0) + ',' + pz.toFixed(0) + ' | Patches: ' + Object.keys(patches).length;
 }
 
